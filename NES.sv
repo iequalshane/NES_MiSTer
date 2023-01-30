@@ -256,7 +256,7 @@ parameter CONF_STR = {
 	"P3o9,Pause when OSD is open,Off,On;",
 	"- ;",
 	"R0,Reset;",
-	"J1,A,B,Select,Start,FDS,Mic,Zapper/Vaus Btn,PP/Mat 1,PP/Mat 2,PP/Mat 3,PP/Mat 4,PP/Mat 5,PP/Mat 6,PP/Mat 7,PP/Mat 8,PP/Mat 9,PP/Mat 10,PP/Mat 11,PP/Mat 12,Savestates;",
+	"J1,A,B,Select,Start,FDS,Mic,Zapper/Vaus Btn,PP/Mat 1,PP/Mat 2,PP/Mat 3,PP/Mat 4,PP/Mat 5,PP/Mat 6,PP/Mat 7,PP/Mat 8,PP/Mat 9,PP/Mat 10,PP/Mat 11,PP/Mat 12,Savestates,Reset;",
 	"jn,A,B,Select,Start,L,,R|P;",
 	"jp,B,Y,Select,Start,L,,R|P;",
 	"I,",
@@ -281,7 +281,7 @@ parameter CONF_STR = {
 };
 
 wire [23:0] joyA,joyB,joyC,joyD;
-wire [23:0] joyA_unmod;
+wire [24:0] joyA_unmod;
 wire [10:0] ps2_key;
 wire [1:0] buttons;
 
@@ -778,6 +778,7 @@ wire reset_nes =
 	bk_loading     ||
 	bk_loading_req ||
 	hold_reset     ||
+  joyA_unmod[24] ||
 	(old_sys_type != status[24:23]);
 
 reg [1:0] old_sys_type;
