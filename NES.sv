@@ -1149,7 +1149,35 @@ video_mixer #(260, 0, 1) video_mixer
 	.freeze_sync(),
 	.VGA_DE(vga_de),
 	.hq2x(scale==1),
-	.scandoubler(scale || forced_scandoubler)
+	.scandoubler(scale || forced_scandoubler),
+  .VGA_R(red),
+  .VGA_G(green),
+  .VGA_B(blue)
+);
+
+
+wire [7:0] red, green, blue;
+
+cofi coffee (
+	.clk(clk),
+	.pix_ce(ce_pix),
+	.enable(1),//cofi_enable),
+
+	.hblank(HBlank),
+	.vblank(VBlank),
+	.hs(HSync),
+	.vs(VSync),
+	.red(red),
+	.green(green),
+	.blue(blue),
+
+	.hblank_out(hblank_c),
+	.vblank_out(vblank_c),
+	.hs_out(hs_c),
+	.vs_out(vs_c),
+	.red_out(VGA_R),
+	.green_out(VGA_G),
+	.blue_out(VGA_B)
 );
 
 ////////////////////////////  CODES  ///////////////////////////////////
