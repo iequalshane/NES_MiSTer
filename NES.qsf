@@ -57,7 +57,7 @@ set_global_assignment -name SEED 1
 source sys/sys.tcl
 source sys/sys_analog.tcl
 source files.qip
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/cofi.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/monochrome.sv
 set_global_assignment -name CDF_FILE jtag.cdf
 set_global_assignment -name QIP_FILE sys/sys.qip
 set_global_assignment -name QIP_FILE rtl/t65/t65.qip

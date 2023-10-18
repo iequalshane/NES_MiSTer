@@ -234,6 +234,7 @@ parameter CONF_STR = {
 	"d6P1O5,Vertical Crop,Disabled,216p(5x);",
 	"d6P1o36,Crop Offset,0,2,4,8,10,12,-12,-10,-8,-6,-4,-2;",
 	"P1o78,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
+	"P1oMN,Monochrome,Off,B/W,Amber,Green;",
 	"P1-;",
 	"P1O4,Hide Overscan,Off,On;",
 	"P1ORS,Mask Edges,Off,Left,Both,Auto;",
@@ -1158,10 +1159,10 @@ video_mixer #(260, 0, 1) video_mixer
 
 wire [7:0] red, green, blue;
 
-cofi coffee (
+monochrome mono (
 	.clk(clk),
 	.pix_ce(ce_pix),
-	.enable(1),//cofi_enable),
+	.enable(1),//mono_enable),
 
 	.hblank(HBlank),
 	.vblank(VBlank),
@@ -1170,6 +1171,7 @@ cofi coffee (
 	.red(red),
 	.green(green),
 	.blue(blue),
+	.mode(status[55:54]),
 
 	.hblank_out(hblank_c),
 	.vblank_out(vblank_c),
