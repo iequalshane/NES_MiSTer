@@ -228,6 +228,7 @@ parameter CONF_STR = {
 	"P1-;",
 	"P1oFH,Palette,Kitrinx,Smooth,Wavebeam,Sony CXA,PC-10 Better,Custom;",
 	"H3P1FC3,PAL,Custom Palette;",
+	"P1oM,PC10 PPU Emphasis,No,Yes;",
 	"P1-;",
 	"P1OIJ,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"P1O13,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
@@ -1140,7 +1141,8 @@ video video
 	.load_color_index(pal_index),
 	.emphasis(emphasis),
 	.reticle(~status[22] ? reticle : 2'b00),
-	.pal_video(pal_video)
+	.pal_video(pal_video),
+	.pc10emph(status[54])
 );
 
 video_mixer #(260, 0, 1) video_mixer
