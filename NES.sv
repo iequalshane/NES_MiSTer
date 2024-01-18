@@ -198,6 +198,16 @@ video_freak video_freak
 	.SCALE(status[40:39])
 );
 
+// If video mode (NTSC/PAL/DANDY) changes, force vmode update
+reg [1:0] video_status;
+reg new_vmode = 0;
+always @(posedge clk) begin
+    if (video_status != status[24:23]) begin
+        video_status <= status[24:23];
+        new_vmode <= ~new_vmode;
+    end
+end
+
 // Status Bit Map:
 // 0         1         2         3          4         5         6
 // 01234567890123456789012345678901 23456789012345678901234567890123
@@ -385,6 +395,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.forced_scandoubler(forced_scandoubler),
+	.new_vmode(new_vmode),
 
 	.joystick_0(joyA_unmod),
 	.joystick_1(joyB),
@@ -1343,10 +1354,14 @@ wire ss_save, ss_load, ss_info_req;
 wire mapper_has_savestate;
 wire statusUpdate;
 
+//Ignore F1-F4 when famicom keyboard is enabled
+wire skip_ps2 = (ps2_key[7:0] == 'h04) || (ps2_key[7:0] == 'h05) || (ps2_key[7:0] == 'h06) || (ps2_key[7:0] == 'h0C);
+wire [10:0] ps2_key_adjust = skip_ps2 && fkeyb ? 'h0 : ps2_key[10:0];
+
 savestate_ui savestate_ui
 (
 	.clk            (clk           ),
-	.ps2_key        (ps2_key[10:0] ),
+	.ps2_key        (ps2_key_adjust),
 	.allow_ss       (rom_loaded & mapper_has_savestate),
 	.joySS          (joyA_unmod[23]),
 	.joyRight       (joyA_unmod[0] ),
