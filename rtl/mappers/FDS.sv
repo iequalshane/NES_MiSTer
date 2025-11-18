@@ -29,7 +29,16 @@ module MapperFDS(
 	input [1:0] max_diskside,
 	input       fds_busy,
 	input       fds_eject_btn,
-	input       fds_auto_eject_en
+	input       fds_auto_eject_en,
+	input       fds_fast,
+
+	// savestates
+	input       [63:0]  SaveStateBus_Din,
+	input       [ 9:0]  SaveStateBus_Adr,
+	input               SaveStateBus_wren,
+	input               SaveStateBus_rst,
+	input               SaveStateBus_load,
+	output      [63:0]  SaveStateBus_Dout
 );
 
 assign prg_aout_b      = enable ? prg_aout : 22'hZ;
@@ -44,13 +53,13 @@ assign flags_out_b     = enable ? flags_out : 16'hZ;
 assign audio_b         = enable ? audio[15:0] : 16'hZ;
 assign diskside_b      = enable ? diskside : 2'hZ;
 
-wire [21:0] prg_aout, chr_aout;
+wire [21:0] prg_addr, prg_aout, chr_aout;
 wire prg_allow;
 wire chr_allow;
 wire vram_a10;
 wire vram_ce;
 wire [7:0] prg_dout;
-wire [15:0] flags_out = {14'd0, prg_bus_write, 1'b0};
+wire [15:0] flags_out = {12'd0, 1'b1, 1'b0, prg_bus_write, 1'b0};
 wire prg_bus_write;
 wire irq;
 
@@ -79,7 +88,7 @@ reg byte_transfer;
 reg got_start_byte, got_start_byte_d;
 reg after_pre_gap;
 reg read_4030;
-reg [15:0] transfer_cnt;
+reg [19:0] transfer_cnt;
 reg [15:0] byte_cnt;
 reg [15:0] file_size;
 reg [2:0] block_type;
@@ -96,8 +105,10 @@ reg [22:0] cpu_clk_cnt;
 reg old_eject_btn;
 
 reg read_disk_d, write_disk_d;
-wire read_disk = (prg_read & prg_ain == 16'h4031);
-wire write_disk = (prg_write & prg_ain == 16'h4024 & write_en & byte_transfer & got_start_byte_d & motor_on & ~diskreset & ~block_end);
+wire prg_disk_rd_reg = (prg_ain == 16'h4031);
+wire prg_disk_wr_reg = (prg_ain == 16'h4024);
+wire read_disk = (~prg_write & prg_disk_rd_reg);
+wire write_disk = (prg_write & prg_disk_wr_reg & write_en & byte_transfer & got_start_byte_d & motor_on & ~diskreset & ~block_end);
 wire disk_ready = (~disk_eject & ~diskreset & motor_on & ~diskend);
 wire [7:0] disk_data = write_disk ? prg_din : prg_dbus;
 wire disk_irq = (byte_transfer_flag & disk_irq_en);
@@ -106,9 +117,14 @@ wire disk_irq = (byte_transfer_flag & disk_irq_en);
 // The gap at the start of the disk is typically 28300 bits long and gaps between blocks 976 bits.
 // A byte takes 82.99 microseconds which is around 149 CPU cycles.
 // We can use shorter delays here.
-localparam PRE_GAP_DELAY = 16'd65535; // 525420
-localparam BYTE_DELAY    = 16'd99;  // 149
-localparam EJECT_DELAY   = 80 * 23'd22335;
+localparam PRE_GAP_DELAY_FAST = 20'd65535;
+localparam PRE_GAP_DELAY_ORIG = 20'd525420;
+localparam BYTE_DELAY_FAST    = 20'd99;
+localparam BYTE_DELAY_ORIG    = 20'd149;
+localparam EJECT_DELAY        = 100 * 23'd29780;
+
+wire [19:0] pre_gap_delay = fds_fast ? PRE_GAP_DELAY_FAST : PRE_GAP_DELAY_ORIG;
+wire [19:0] byte_delay = fds_fast ? BYTE_DELAY_FAST : BYTE_DELAY_ORIG;
 
 always@(posedge clk) begin
 	if(~enable) begin
@@ -134,6 +150,39 @@ always@(posedge clk) begin
 		cpu_clk_cnt <= 0;
 		read_disk_d <= 0;
 		write_disk_d <= 0;
+	end else if (SaveStateBus_load) begin
+		timer_irq_en       <= SS_MAP1[    0];
+		timer_irq          <= SS_MAP1[    1];
+		timer_irq_repeat   <= SS_MAP1[    2];
+		timer              <= SS_MAP1[18: 3];
+		timerlatch         <= SS_MAP1[34:19];
+		disk_reg_en        <= SS_MAP1[   35];
+		disk_irq_en        <= SS_MAP1[   36];
+		byte_transfer_flag <= SS_MAP1[   37];
+		byte_transfer      <= SS_MAP1[   38];
+		got_start_byte     <= SS_MAP1[   39];
+		got_start_byte_d   <= SS_MAP1[   40];
+		motor_on           <= SS_MAP1[   41];
+		diskreset          <= SS_MAP1[   42];
+		write_en           <= SS_MAP1[   43];
+		vertical           <= SS_MAP1[   44];
+		new_byte           <= SS_MAP1[   45];
+		byte_cnt           <= SS_MAP1[61:46];
+		block_end          <= SS_MAP1[   62];
+		after_pre_gap      <= SS_MAP1[   63];
+		block_type         <= SS_MAP2[ 2: 0];
+		transfer_cnt       <= SS_MAP2[22: 3];
+		diskside           <= SS_MAP2[24:23];
+		cpu_clk_cnt        <= SS_MAP2[47:25];
+		disk_eject_auto    <= SS_MAP2[   48];
+		disk_eject_wait    <= SS_MAP2[   49];
+		read_4032_cnt      <= SS_MAP2[54:50];
+		read_4030          <= SS_MAP2[   55];
+		read_disk_d        <= SS_MAP2[   56];
+		write_disk_d       <= SS_MAP2[   57];
+		old_eject_btn      <= SS_MAP2[   58];
+		diskpos            <= SS_MAP3[15: 0];
+		file_size          <= SS_MAP3[31:16];
 	end else begin
 
 		if (ce) begin
@@ -218,7 +267,7 @@ always@(posedge clk) begin
 
 			if (~fds_auto_eject_en) begin
 				old_eject_btn <= fds_eject_btn;
-				if (~old_eject_btn & fds_eject_btn & ~write_en) begin
+				if (~old_eject_btn & fds_eject_btn & ~write_en & ~fds_busy) begin
 					diskside <= (max_diskside == diskside) ? 2'd0 : (diskside + 1'b1);
 					disk_eject_auto <= 1; // Minimum eject time
 					cpu_clk_cnt <= 0;
@@ -226,13 +275,14 @@ always@(posedge clk) begin
 			end
 
 			if (fds_auto_eject_en) begin
-				if (diskreset) begin // Diskreset is usually on when the game is waiting for disk swap
+				if (diskreset & ~fds_busy) begin // Diskreset is usually on when the game is waiting for disk swap
 					if (~disk_eject_auto) begin
 						if (prg_read & prg_ain == 16'h4032 & ~disk_eject_wait) begin
 							read_4032_cnt <= read_4032_cnt + 1'b1;
 						end
 
 						if (read_4032_cnt == 5'd20) begin
+							read_4032_cnt <= 0;
 							disk_eject_auto <= 1;
 							disk_eject_wait <= 1;
 							cpu_clk_cnt <= 0;
@@ -247,7 +297,6 @@ always@(posedge clk) begin
 			end
 
 			if (cpu_clk_cnt == EJECT_DELAY) begin // Eject for a certain amount of frames
-				read_4032_cnt <= 0;
 				cpu_clk_cnt <= 0;
 				if (disk_eject_auto) begin
 					disk_eject_auto <= 0;
@@ -316,11 +365,11 @@ always@(posedge clk) begin
 				after_pre_gap <= 0;
 			end else begin
 				if (~after_pre_gap) begin
-					if (transfer_cnt == PRE_GAP_DELAY) begin // Beginning of disk
+					if (transfer_cnt == pre_gap_delay) begin // Beginning of disk
 						after_pre_gap <= 1;
 						transfer_cnt <= 0;
 					end
-				end else if (transfer_cnt == BYTE_DELAY) begin
+				end else if (transfer_cnt == byte_delay) begin
 					transfer_cnt <= 0;
 					if (byte_transfer & ~fds_busy) begin
 						byte_transfer_flag <= 1;
@@ -331,6 +380,44 @@ always@(posedge clk) begin
 		end
 	end
 end
+
+assign SS_MAP1_BACK[    0] = timer_irq_en;
+assign SS_MAP1_BACK[    1] = timer_irq;
+assign SS_MAP1_BACK[    2] = timer_irq_repeat;
+assign SS_MAP1_BACK[18: 3] = timer;
+assign SS_MAP1_BACK[34:19] = timerlatch;
+assign SS_MAP1_BACK[   35] = disk_reg_en;
+assign SS_MAP1_BACK[   36] = disk_irq_en;
+assign SS_MAP1_BACK[   37] = byte_transfer_flag;
+assign SS_MAP1_BACK[   38] = byte_transfer;
+assign SS_MAP1_BACK[   39] = got_start_byte;
+assign SS_MAP1_BACK[   40] = got_start_byte_d;
+assign SS_MAP1_BACK[   41] = motor_on;
+assign SS_MAP1_BACK[   42] = diskreset;
+assign SS_MAP1_BACK[   43] = write_en;
+assign SS_MAP1_BACK[   44] = vertical;
+assign SS_MAP1_BACK[   45] = new_byte;
+assign SS_MAP1_BACK[61:46] = byte_cnt;
+assign SS_MAP1_BACK[   62] = block_end;
+assign SS_MAP1_BACK[   63] = after_pre_gap;
+
+assign SS_MAP2_BACK[ 2: 0] = block_type;
+assign SS_MAP2_BACK[22: 3] = transfer_cnt;
+assign SS_MAP2_BACK[24:23] = diskside;
+assign SS_MAP2_BACK[47:25] = cpu_clk_cnt;
+assign SS_MAP2_BACK[   48] = disk_eject_auto;
+assign SS_MAP2_BACK[   49] = disk_eject_wait;
+assign SS_MAP2_BACK[54:50] = read_4032_cnt;
+assign SS_MAP2_BACK[   55] = read_4030;
+assign SS_MAP2_BACK[   56] = read_disk_d;
+assign SS_MAP2_BACK[   57] = write_disk_d;
+assign SS_MAP2_BACK[   58] = old_eject_btn;
+assign SS_MAP2_BACK[63:59] = 0;
+
+assign SS_MAP3_BACK[15: 0] = diskpos;
+assign SS_MAP3_BACK[31:16] = file_size;
+assign SS_MAP3_BACK[63:32] = 0;
+
 
 // Loopy's patched bios use a trick to catch requested diskside for games
 // using standard bios load process.
@@ -350,7 +437,7 @@ assign romoffset=diskpos + sideoffset;
 
 
 // BIOS patches
-localparam BIOS_PATCHES_CNT = 51;
+localparam BIOS_PATCHES_CNT = 33;
 wire [23:0] BIOS_PATCHES[BIOS_PATCHES_CNT] = '{
 	// Wait for button press before loading disk
 	'hEEE2_09,                       // Don't branch here otherwise no music
@@ -372,8 +459,11 @@ wire [23:0] BIOS_PATCHES[BIOS_PATCHES_CNT] = '{
 	'hF4D8_B1, 'hF4D9_00,            // LDA ($00),Y
 	'hF4DA_30, 'hF4DB_03,            // BMI $F4DF
 	'hF4DC_8D, 'hF4DD_27, 'hF4DE_40, // STA $4027
-	'hF4DF_4C, 'hF4E0_E3, 'hF4E1_E6, // JMP $E6E3 (StartXfer)
+	'hF4DF_4C, 'hF4E0_E3, 'hF4E1_E6  // JMP $E6E3 (StartXfer)
+};
 
+localparam BIOS_PATCHES2_CNT = 18;
+wire [23:0] BIOS_PATCHES2[BIOS_PATCHES2_CNT] = '{
 	// Remove some delays
 	//'hE652_EA, 'hE653_EA, 'hE654_EA, // NOP <- This delay is needed for SMB2J Level 4-4 end
 	'hE655_EA, 'hE656_EA, 'hE657_EA,
@@ -384,20 +474,32 @@ wire [23:0] BIOS_PATCHES[BIOS_PATCHES_CNT] = '{
 	'hE6ED_EA, 'hE6EE_EA, 'hE6EF_EA
 };
 
-
 reg [7:0] patch_data;
-reg patch_found;
+reg bios_patch1_found, bios_patch2_found;
 integer i;
 always @* begin
-	patch_found = 0;
+	bios_patch1_found = 0;
+	bios_patch2_found = 0;
 	patch_data = 0;
 	for (i = 0; i < BIOS_PATCHES_CNT; i=i+1) begin
 		if (BIOS_PATCHES[i][23:8] == prg_ain) begin
 			patch_data = BIOS_PATCHES[i][7:0];
-			patch_found = 1;
+			bios_patch1_found = 1;
 		end
 	end
+
+	// These are only enabled when fds_fast = 1
+	for (i = 0; i < BIOS_PATCHES2_CNT; i=i+1) begin
+		if (BIOS_PATCHES2[i][23:8] == prg_ain) begin
+			patch_data = BIOS_PATCHES2[i][7:0];
+			bios_patch2_found = 1;
+		end
+	end
+
+	if (~fds_fast) bios_patch2_found = 0;
 end
+
+wire bios_patch_found = bios_patch1_found | bios_patch2_found;
 
 //NES data out
 reg [7:0] prg_dout_r;
@@ -405,14 +507,14 @@ always @* begin
 	fds_prg_bus_write = 1'b1;
 
 	if (prg_ain == 16'h4030) begin //IRQ status
-		prg_dout_r = {1'b0, diskend, 4'd0 ,byte_transfer_flag, timer_irq};
+		prg_dout_r = {byte_transfer_flag, diskend, 4'd0, 1'b0, timer_irq};
 	end else if (prg_ain == 16'h4032) begin //drive status
 		prg_dout_r = {4'h4, 1'b0, disk_eject, ~disk_ready, disk_eject};
 	end else if (prg_ain == 16'h4033) begin //power / exp
 		prg_dout_r = 8'b10000000;
 	end else if (fds_audio_prg_bus_write) begin
 		prg_dout_r = audio_dout;
-	end else if (patch_found) begin
+	end else if (bios_patch_found) begin
 		prg_dout_r = patch_data;
 	end else begin
 		prg_dout_r = 8'd0;
@@ -429,19 +531,32 @@ assign disk_eject = disk_eject_auto | fds_eject_btn;
 
 //bankswitch control: 6000-DFFF = sram, E000-FFFF = bios or disk
 wire prg_is_ram = prg_ain[15] ^ (&prg_ain[14:13]); //$6000-DFFF
-wire [5:0] prgbank = prg_is_ram ? { 4'b0001,prg_ain[14:13] } : 6'd0;
+assign prg_addr = prg_is_ram ? { 7'b10_0000_1, prg_ain[14:0] } : { 9'd0, prg_ain[12:0] };
 
 //Switch to Cart Ram for Disk access
-//PRG 00000-01FFF = bios
-//PRG 08000-0FFFF = wram
-//PRG 40000-7FFFF = disk image
-assign prg_aout = (read_disk | write_disk) ? { 4'b111_1,romoffset } : { 3'b000,prgbank,prg_ain[12:0] };
-assign prg_allow = (prg_read & prg_ain[15] & ~fds_prg_bus_write) | (prg_is_ram | read_disk | write_disk);
+//PRG 000000-001FFF = bios
+//PRG 208000-20FFFF = wram
+//PRG 3C0000-3FFFFF = disk image
+assign prg_aout = (prg_disk_rd_reg | prg_disk_wr_reg) ? { 4'b111_1,romoffset } : prg_addr;
+assign prg_allow = ((prg_ain[15] | prg_disk_rd_reg) & ~prg_write & ~bios_patch_found) | (prg_is_ram | write_disk);
 
 assign chr_allow = 1;
 assign chr_aout = { 9'b10_0000_000, chr_ain[12:0] };
 assign vram_a10 = vertical ? chr_aout[10] : chr_aout[11];
 assign vram_ce = chr_ain[13];
+
+// savestate
+localparam SAVESTATE_MODULES    = 3;
+wire [63:0] SaveStateBus_wired_or[0:SAVESTATE_MODULES-1];
+wire [63:0] SS_MAP1, SS_MAP2, SS_MAP3;
+wire [63:0] SS_MAP1_BACK, SS_MAP2_BACK, SS_MAP3_BACK;
+wire [63:0] SaveStateBus_Dout_active = SaveStateBus_wired_or[0] | SaveStateBus_wired_or[1] | SaveStateBus_wired_or[2];
+
+eReg_SavestateV #(SSREG_INDEX_MAP1, 64'h0000000000000000) iREG_SAVESTATE_MAP1 (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[0], SS_MAP1_BACK, SS_MAP1);
+eReg_SavestateV #(SSREG_INDEX_MAP2, 64'h0000000000000000) iREG_SAVESTATE_MAP2 (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[1], SS_MAP2_BACK, SS_MAP2);
+eReg_SavestateV #(SSREG_INDEX_MAP3, 64'h0000000000000000) iREG_SAVESTATE_MAP3 (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[2], SS_MAP3_BACK, SS_MAP3);
+
+assign SaveStateBus_Dout = enable ? SaveStateBus_Dout_active : 64'h0000000000000000;
 
 endmodule
 
@@ -454,7 +569,14 @@ module fds_mixed (
 	input   [7:0] data_in,
 	output  [7:0] data_out,
 	input  [15:0] audio_in,    // Inverted audio from APU
-	output [15:0] audio_out
+	output [15:0] audio_out,
+
+	input         Savestate_MAPRAMactive,
+	input [ 7:0]  Savestate_MAPRAMAddr,
+	input         Savestate_MAPRAMRdEn,
+	input         Savestate_MAPRAMWrEn,
+	input  [7:0]  Savestate_MAPRAMWriteData,
+	output [7:0]  Savestate_MAPRAMReadData
 );
 
 //expansion audio
@@ -467,7 +589,14 @@ fds_audio fds_audio
 	.addr_in(addr_in),
 	.data_in(data_in),
 	.data_out(data_out),
-	.audio_out(audio_exp)
+	.audio_out(audio_exp),
+
+	.Savestate_MAPRAMactive   (Savestate_MAPRAMactive),
+	.Savestate_MAPRAMAddr     (Savestate_MAPRAMAddr),
+	.Savestate_MAPRAMRdEn     (Savestate_MAPRAMRdEn),
+	.Savestate_MAPRAMWrEn     (Savestate_MAPRAMWrEn),
+	.ss_di                    (Savestate_MAPRAMWriteData),
+	.ss_do                    (Savestate_MAPRAMReadData)
 );
 
 wire [11:0] audio_exp;
@@ -524,7 +653,14 @@ module fds_audio(
 	input     [15:0] addr_in,
 	input      [7:0] data_in,
 	output reg [7:0] data_out,
-	output    [11:0] audio_out
+	output    [11:0] audio_out,
+
+	input            Savestate_MAPRAMactive,
+	input      [7:0] Savestate_MAPRAMAddr,
+	input            Savestate_MAPRAMRdEn,
+	input            Savestate_MAPRAMWrEn,
+	input      [7:0] ss_di,
+	output reg [7:0] ss_do
 );
 
 // Volume Envelope
@@ -634,6 +770,37 @@ if (reset) begin
 	wave_accum <= 0;
 	mod_accum <= 0;
 	{cycles, sweep_ticks, sweep_env_ticks, vol_ticks, vol_env_ticks, master_vol} <= 0;
+end else if (Savestate_MAPRAMWrEn) begin
+	casez (Savestate_MAPRAMAddr)
+		8'h00: { vol_disable, vol_dir, vol_speed } <= ss_di;
+		8'h01: { master_vol, vol_gain } <= ss_di;
+		8'h02: { vol_pwm_lat } <= ss_di[5:0];
+		8'h03: { sweep_disable, sweep_dir, sweep_speed } <= ss_di;
+		8'h04: { sweep_gain } <= ss_di[5:0];
+		8'h05: { mod_frequency[7:0] } <= ss_di;
+		8'h06: { mod_frequency[11:8] } <= ss_di[3:0];
+		8'h07: { mod_accum[7:0] } <= ss_di;
+		8'h08: { mod_accum[15:8] } <= ss_di;
+		8'h09: { sweep_ticks, mod_accum[17:16] } <= ss_di;
+		8'h0A: { mod_disable, mod_bias } <= ss_di;
+		8'h0B: { wave_accum[7:0] } <= ss_di;
+		8'h0C: { wave_accum[15:8] } <= ss_di;
+		8'h0D: { wave_accum[23:16] } <= ss_di;
+		8'h0E: { wave_wren, wave_disable, wave_latch } <= ss_di;
+		8'h0F: { wave_frequency[7:0] } <= ss_di;
+		8'h10: { wave_frequency[11:8] } <= ss_di[3:0];
+		8'h11: { env_speed } <= ss_di;
+		8'h12: { vol_env_ticks[7:0] } <= ss_di;
+		8'h13: { vol_env_ticks[11:8] } <= ss_di[3:0];
+		8'h14: { sweep_env_ticks[7:0] } <= ss_di;
+		8'h15: { cycles, sweep_env_ticks[11:8] } <= ss_di;
+		8'h16: { mod_step, env_disable, vol_ticks } <= ss_di;
+		// $20-$3F
+		8'b001?????: mod_table[Savestate_MAPRAMAddr[4:0]] <= ss_di[2:0];
+		// $40-$7F
+		8'b01??????: wave_table[Savestate_MAPRAMAddr[5:0]] <= ss_di[5:0];
+		default: ;
+	endcase
 end else if (~old_m2 & m2) begin
 	//**** Timings ****//
 	cycles <= wave_disable ? 4'h0 : cycles + 1'b1;
@@ -772,6 +939,43 @@ end else if (~old_m2 & m2) begin
 		endcase
 	end
 end // if m2
+end
+
+always @(posedge clk) begin
+	if (reset) begin
+		ss_do <= 8'd0;
+	end else if (Savestate_MAPRAMRdEn) begin
+		casez (Savestate_MAPRAMAddr)
+			8'h00: ss_do <= { vol_disable, vol_dir, vol_speed };
+			8'h01: ss_do <= { master_vol, vol_gain };
+			8'h02: ss_do <= { 2'd0, vol_pwm_lat };
+			8'h03: ss_do <= { sweep_disable, sweep_dir, sweep_speed };
+			8'h04: ss_do <= { 2'd0, sweep_gain };
+			8'h05: ss_do <= { mod_frequency[7:0] };
+			8'h06: ss_do <= { 4'd0, mod_frequency[11:8] };
+			8'h07: ss_do <= { mod_accum[7:0] };
+			8'h08: ss_do <= { mod_accum[15:8] };
+			8'h09: ss_do <= { sweep_ticks, mod_accum[17:16] };
+			8'h0A: ss_do <= { mod_disable, mod_bias };
+			8'h0B: ss_do <= { wave_accum[7:0] };
+			8'h0C: ss_do <= { wave_accum[15:8] };
+			8'h0D: ss_do <= { wave_accum[23:16] };
+			8'h0E: ss_do <= { wave_wren, wave_disable, wave_latch };
+			8'h0F: ss_do <= { wave_frequency[7:0] };
+			8'h10: ss_do <= { 4'd0, wave_frequency[11:8] };
+			8'h11: ss_do <= { env_speed };
+			8'h12: ss_do <= { vol_env_ticks[7:0] };
+			8'h13: ss_do <= { 4'd0, vol_env_ticks[11:8] };
+			8'h14: ss_do <= { sweep_env_ticks[7:0] };
+			8'h15: ss_do <= { cycles, sweep_env_ticks[11:8] };
+			8'h16: ss_do <= { mod_step, env_disable, vol_ticks };
+			// $20-$3F
+			8'b001?????: ss_do <= { 5'd0, mod_table[Savestate_MAPRAMAddr[4:0]] };
+			// $40-$7F
+			8'b01??????: ss_do <= { 2'd0, wave_table[Savestate_MAPRAMAddr[5:0]] };
+			default: ss_do <= 8'd0;
+		endcase
+	end
 end
 
 endmodule

@@ -4,7 +4,7 @@ module MMC5(
 	input        clk,         // System clock
 	input        ce,          // M2 ~cpu_clk
 	input        enable,      // Mapper enabled
-	input [31:0] flags,       // Cart flags
+	input [63:0] flags,       // Cart flags
 	input [15:0] prg_ain,     // prg address
 	inout [21:0] prg_aout_b,  // prg address out
 	input        prg_read,    // prg read
@@ -30,18 +30,18 @@ module MMC5(
 	input        chr_write,   // CHR Write
 	inout  [7:0] chr_dout_b,  // chr data (non standard)
 	input        paused,
-	// savestates              
+	// savestates
 	input       [63:0]  SaveStateBus_Din,
 	input       [ 9:0]  SaveStateBus_Adr,
 	input               SaveStateBus_wren,
 	input               SaveStateBus_rst,
 	input               SaveStateBus_load,
 	output      [63:0]  SaveStateBus_Dout,
-	
-	input         Savestate_MAPRAMactive, 
-	input  [9:0]  Savestate_MAPRAMAddr,     
-	input         Savestate_MAPRAMRdEn,    
-	input         Savestate_MAPRAMWrEn,    
+
+	input         Savestate_MAPRAMactive,
+	input  [9:0]  Savestate_MAPRAMAddr,
+	input         Savestate_MAPRAMRdEn,
+	input         Savestate_MAPRAMWrEn,
 	input  [7:0]  Savestate_MAPRAMWriteData,
 	output [7:0]  Savestate_MAPRAMReadData
 );
@@ -63,7 +63,8 @@ reg [21:0] chr_aout;
 wire prg_allow;
 wire chr_allow;
 wire vram_a10;
-reg [7:0] chr_dout, prg_dout;
+wire [7:0] chr_dout;
+reg [7:0] chr_data, prg_dout;
 wire vram_ce;
 wire [15:0] flags_out = {12'h0, 1'b1, 1'b0, prg_bus_write, has_chr_dout};
 wire irq;
@@ -106,7 +107,6 @@ reg in_split_area;
 
 reg rendering_en;
 reg ppu_sprite16_r;
-wire sprite8x16_mode = ppu_sprite16_r & rendering_en;
 
 reg ppu_in_frame, last_ppu_in_frame;
 reg [7:0] ppu_scanline;
@@ -121,9 +121,6 @@ reg is_sprite_fetch;
 // That is too late for the first extra sprite so also use chr_ex here.
 wire is_bg_fetch = ~(is_sprite_fetch | chr_ex);
 
-// On an original NES these PPU addresses should be latched because the lower 8 bits
-// are overwritten with the read data on the 2nd cycle when PPU_/RD goes low.
-// In the core the address is not changed so latching is not needed.
 wire ppu_is_tile_addr = (~chr_ain[13]);
 wire ppu_is_at_addr = (chr_ain[13:12] == 2'b10) & (&chr_ain[9:6]);
 wire ppu_is_nt_addr = (chr_ain[13:12] == 2'b10) & (~&chr_ain[9:6]);
@@ -137,7 +134,6 @@ wire [9:0] ram_addrB = Savestate_MAPRAMactive ? Savestate_MAPRAMAddr      : exra
 wire       ram_wrenB = Savestate_MAPRAMactive ? Savestate_MAPRAMWrEn      : 1'b0;
 wire [7:0] ram_dataB = Savestate_MAPRAMactive ? Savestate_MAPRAMWriteData : 8'b0;
 wire [7:0] last_read_ram;
-
 
 dpram #(.widthad_a(10)) expansion_ram
 (
@@ -154,7 +150,6 @@ dpram #(.widthad_a(10)) expansion_ram
 	.data_b    (ram_dataB),
 	.q_b       (last_read_ram)
 );
-
 
 // Handle IO register writes
 always @(posedge clk) begin
@@ -200,17 +195,20 @@ always @(posedge clk) begin
 		endcase
 
 		// Remember which set of CHR was written to last.
-		// chr_last is set to 0 when changing bank with sprites set to 8x8
 		if (prg_ain[9:4] == 6'b010010) //(prg_ain[9:0] >= 10'h120 && prg_ain[9:0] < 10'h130)
-			chr_last <= prg_ain[3] & ppu_sprite16_r;
+			chr_last <= prg_ain[3];
 
 	end
 
+		// chr_last is set to 0 when sprite size is 8x8
+		if (~ppu_sprite16_r) begin
+			chr_last <= 0;
+		end
+
 		if (prg_write && prg_ain == 16'h2000) begin // $2000
 			ppu_sprite16_r <= prg_din[5];
-			if (~prg_din[5]) // chr_last is set to 0 when changing sprite size to 8x8
-				chr_last <= 0;
 		end
+
 		if (prg_write && prg_ain == 16'h2001) begin // $2001
 			rendering_en <= |prg_din[4:3];
 		end
@@ -236,7 +234,7 @@ always @(posedge clk) begin
 		prg_bank_3 <= 7'h7F;
 		prg_mode <= 3;
 	end
-	
+
 	if (SaveStateBus_load) begin
 		prg_mode            <= SS_MAP1[ 1: 0];
 		chr_mode            <= SS_MAP1[ 3: 2];
@@ -300,7 +298,7 @@ assign SS_MAP2_BACK[39:30] = chr_bank_3;
 assign SS_MAP2_BACK[49:40] = chr_bank_4;
 assign SS_MAP2_BACK[59:50] = chr_bank_5;
 assign SS_MAP2_BACK[63:60] = 4'b0; // free to be used
-				  
+
 assign SS_MAP3_BACK[ 9: 0] = chr_bank_6;
 assign SS_MAP3_BACK[19:10] = chr_bank_7;
 assign SS_MAP3_BACK[29:20] = chr_bank_8;
@@ -308,7 +306,7 @@ assign SS_MAP3_BACK[39:30] = chr_bank_9;
 assign SS_MAP3_BACK[49:40] = chr_bank_a;
 assign SS_MAP3_BACK[59:50] = chr_bank_b;
 assign SS_MAP3_BACK[63:60] = 4'b0; // free to be used
-				  
+
 assign SS_MAP4_BACK[ 1: 0] = upper_chr_bank_bits;
 assign SS_MAP4_BACK[    2] = vsplit_enable;
 assign SS_MAP4_BACK[    3] = vsplit_side;
@@ -410,19 +408,18 @@ always @(posedge clk) begin
 				end
 
 				if (~last_chr_a13 & chr_ain_o[13]) begin
-					if (ppu_tile_cnt == 34)
+					if (ppu_tile_cnt == 34) begin
 						is_sprite_fetch <= 1;
-
-					if (ppu_tile_cnt == 0)
-						is_sprite_fetch <= 0;
-
-					if (ppu_tile_cnt == 0)
-						in_split_area <= !vsplit_side;
-					else if (ppu_tile_cnt == {1'b0, vsplit_startstop})
-						in_split_area <= vsplit_side;
-					else if (ppu_tile_cnt == 34)
 						in_split_area <= 0;
+					end
 
+					if (ppu_tile_cnt == 0) begin
+						is_sprite_fetch <= 0;
+					end
+
+					if (ppu_tile_cnt == {1'b0, vsplit_startstop}) begin
+						in_split_area <= 1;
+					end
 				end
 			end
 		end
@@ -497,35 +494,35 @@ wire [1:0] split_attr = (!loopy[1] && !loopy[6]) ? last_read_ram[1:0] :
 						(!loopy[1] &&  loopy[6]) ? last_read_ram[5:4] :
 													last_read_ram[7:6];
 // If splitting is active or not
-wire insplit = in_split_area && vsplit_enable && ~chr_ex;
+wire insplit = vsplit_enable & (in_split_area ^ ~vsplit_side) & ~chr_ex & ~extended_ram_mode[1] & ppu_in_frame & rendering_en;
 
 // Currently reading the attribute byte?
-wire exattr_read = (extended_ram_mode == 1) && ppu_is_at_addr && ppu_in_frame;
+wire exattr_read = (extended_ram_mode == 1) && ppu_is_at_addr && ppu_in_frame && rendering_en;
 
 // If the current chr read should be redirected from |chr_dout| instead.
 assign has_chr_dout = chr_ain[13] && (mirrbits[1] || insplit || exattr_read);
-wire [1:0] override_attr = insplit ? split_attr : (extended_ram_mode == 1) ? last_read_exattr[7:6] : fill_attr;
+
+wire [1:0] override_attr = insplit ? split_attr : exattr_read ? last_read_exattr[7:6] : fill_attr;
+
 always @* begin
-	if (ppu_in_frame) begin
-		if (ppu_is_nt_addr) begin
-			// Name table fetch
-			if (insplit || mirrbits[0] == 0)
-				chr_dout = (extended_ram_mode[1] ? 8'b0 : last_read_ram);
-			else begin
-				// Inserting Filltile
-				chr_dout = fill_tile;
-			end
-		end else begin
-			// Attribute table fetch
-			if (!insplit && !exattr_read && mirrbits[0] == 0)
-				chr_dout = (extended_ram_mode[1] ? 8'b0 : last_read_ram);
-			else
-				chr_dout = {override_attr, override_attr, override_attr, override_attr};
+	if (ppu_is_nt_addr) begin
+		// Name table fetch
+		if (insplit || mirrbits[0] == 0)
+			chr_data = (extended_ram_mode[1] ? 8'b0 : last_read_ram);
+		else begin
+			// Inserting Filltile
+			chr_data = fill_tile;
 		end
 	end else begin
-		chr_dout = last_read_vram;
+		// Attribute table fetch
+		if (!insplit && !exattr_read && mirrbits[0] == 0)
+			chr_data = (extended_ram_mode[1] ? 8'b0 : last_read_ram);
+		else
+			chr_data = {override_attr, override_attr, override_attr, override_attr};
 	end
 end
+
+assign chr_dout = last_read_vram;
 
 // Handle reading from the expansion ram.
 // 0 - Use as extra nametable (possibly for split mode)
@@ -543,8 +540,8 @@ always @(posedge clk) begin
 
 		last_chr_read <= chr_read;
 
-		if (~last_chr_read & chr_read) begin
-			last_read_vram <= extended_ram_mode[1] ? 8'b0 : last_read_ram;
+		if (chr_read) begin
+			last_read_vram <= chr_data;
 
 			if (ppu_is_nt_addr & ppu_in_frame) begin
 				last_read_exattr <= last_read_ram;
@@ -601,13 +598,16 @@ always @* begin
 	//  prgsel[7:3] = 5'b1_1100;  //RAM location for saves
 end
 
-assign prg_aout = {prgsel[7] ? {2'b00, prgsel[6:0]} : {6'b11_1100, prgsel[2:0]}, prg_ain[12:0]};    // 8kB banks
+wire [1:0] prgrammasked = (prgsel[2] || (flags[34:31] != 4'h7)) ? prgsel[1:0] : 2'b00; // if only 8kb of save ram, make sure it gets put in lowest 8k block for save file
+assign prg_aout = {prgsel[7] ? {2'b00, prgsel[6:0]} : {6'b11_1100, prgsel[2], prgrammasked}, prg_ain[12:0]};    // 8kB banks
 
-// Registers $5120-$5127 apply to sprite graphics and $5128-$512B for background graphics, but ONLY when 8x16 sprites are enabled.
-// Otherwise, the last set of registers written to (either $5120-$5127 or $5128-$512B) will be used for all graphics.
+// Registers $5120-$5127 apply to sprite graphics and $5128-$512B for background graphics but ONLY when 8x16 sprites are enabled.
+// If not rendering, the last set of registers written to (either $5120-$5127 or $5128-$512B) will be used.
 // 0 if using $5120-$5127, 1 if using $5128-$512F
+// Only registers $5120-$5127 are used when 8x8 sprites are enabled.
 
-wire chrset = (~sprite8x16_mode) ? 1'd0 : (ppu_in_frame) ? is_bg_fetch : chr_last;
+wire chrset = (ppu_in_frame & rendering_en) ? (is_bg_fetch & ppu_sprite16_r) : chr_last;
+
 reg [9:0] chrsel;
 
 always @* begin
@@ -643,11 +643,11 @@ always @* begin
 	chr_aout = {2'b10, chrsel, chr_ain[9:0]};    // 1kB banks
 
 	// Override |chr_aout| if we're in a vertical split.
-	if (ppu_in_frame && insplit) begin
+	if (ppu_in_frame & rendering_en & insplit) begin
 		//$write("In vertical split!\n");
 //		chr_aout = {2'b10, vsplit_bank, chr_ain[11:3], vscroll[2:0]}; // SL
 		chr_aout = {2'b10, vsplit_bank, chr_ain[11:3], chr_ain[2:0]}; // CL
-	end else if (ppu_in_frame && extended_ram_mode == 1 && is_bg_fetch && ppu_is_tile_addr) begin
+	end else if (ppu_in_frame && rendering_en && extended_ram_mode == 1 && is_bg_fetch && ppu_is_tile_addr) begin
 		//$write("In exram thingy!\n");
 		// Extended attribute mode. Replace the page with the page from exram.
 		chr_aout = {2'b10, upper_chr_bank_bits, last_read_exattr[5:0], chr_ain[11:0]};
@@ -680,14 +680,14 @@ end
 localparam SAVESTATE_MODULES    = 5;
 wire [63:0] SaveStateBus_wired_or[0:SAVESTATE_MODULES-1];
 wire [63:0] SS_MAP1, SS_MAP2, SS_MAP3, SS_MAP4, SS_MAP5;
-wire [63:0] SS_MAP1_BACK, SS_MAP2_BACK, SS_MAP3_BACK, SS_MAP4_BACK, SS_MAP5_BACK;	
+wire [63:0] SS_MAP1_BACK, SS_MAP2_BACK, SS_MAP3_BACK, SS_MAP4_BACK, SS_MAP5_BACK;
 wire [63:0] SaveStateBus_Dout_active = SaveStateBus_wired_or[0] | SaveStateBus_wired_or[1] | SaveStateBus_wired_or[2] | SaveStateBus_wired_or[3] | SaveStateBus_wired_or[4];
-	
-eReg_SavestateV #(SSREG_INDEX_MAP1, 64'h0000000000000000) iREG_SAVESTATE_MAP1 (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[0], SS_MAP1_BACK, SS_MAP1);  
-eReg_SavestateV #(SSREG_INDEX_MAP2, 64'h0000000000000000) iREG_SAVESTATE_MAP2 (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[1], SS_MAP2_BACK, SS_MAP2);  
-eReg_SavestateV #(SSREG_INDEX_MAP3, 64'h0000000000000000) iREG_SAVESTATE_MAP3 (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[2], SS_MAP3_BACK, SS_MAP3);  
-eReg_SavestateV #(SSREG_INDEX_MAP4, 64'h0000000000000000) iREG_SAVESTATE_MAP4 (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[3], SS_MAP4_BACK, SS_MAP4);  
-eReg_SavestateV #(SSREG_INDEX_MAP5, 64'h0000000000000000) iREG_SAVESTATE_MAP5 (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[4], SS_MAP5_BACK, SS_MAP5);  
+
+eReg_SavestateV #(SSREG_INDEX_MAP1, 64'h0000000000000000) iREG_SAVESTATE_MAP1 (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[0], SS_MAP1_BACK, SS_MAP1);
+eReg_SavestateV #(SSREG_INDEX_MAP2, 64'h0000000000000000) iREG_SAVESTATE_MAP2 (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[1], SS_MAP2_BACK, SS_MAP2);
+eReg_SavestateV #(SSREG_INDEX_MAP3, 64'h0000000000000000) iREG_SAVESTATE_MAP3 (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[2], SS_MAP3_BACK, SS_MAP3);
+eReg_SavestateV #(SSREG_INDEX_MAP4, 64'h0000000000000000) iREG_SAVESTATE_MAP4 (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[3], SS_MAP4_BACK, SS_MAP4);
+eReg_SavestateV #(SSREG_INDEX_MAP5, 64'h0000000000000000) iREG_SAVESTATE_MAP5 (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[4], SS_MAP5_BACK, SS_MAP5);
 
 assign SaveStateBus_Dout = enable ? SaveStateBus_Dout_active : 64'h0000000000000000;
 
@@ -704,7 +704,7 @@ module mmc5_mixed (
 	output  [7:0] data_out,
 	input  [15:0] audio_in,    // Inverted audio from APU
 	output [15:0] audio_out,
-	// savestates              
+	// savestates
 	input       [63:0]  SaveStateBus_Din,
 	input       [ 9:0]  SaveStateBus_Adr,
 	input               SaveStateBus_wren,
@@ -731,7 +731,7 @@ always @(posedge clk) begin
 		odd_or_even <= 0;
 	else if (ce)
 		odd_or_even <= ~odd_or_even;
-		
+
 	if (SaveStateBus_load) begin
 		odd_or_even <= SS_MAP1[0];
 	end
@@ -757,10 +757,10 @@ APU mmc5apu(
 	.DmaAck         (1),
 	.DmaAddr        (DmaAddr),
 	.DmaData        (0),
-	.odd_or_even    (odd_or_even),
+	.get_or_put     (odd_or_even),
 	.IRQ            (apu_irq),
 	// savestates
-	.SaveStateBus_Din  (SaveStateBus_Din ), 
+	.SaveStateBus_Din  (SaveStateBus_Din ),
 	.SaveStateBus_Adr  (SaveStateBus_Adr ),
 	.SaveStateBus_wren (SaveStateBus_wren),
 	.SaveStateBus_rst  (SaveStateBus_rst ),
@@ -776,10 +776,10 @@ defparam mmc5apu.SSREG_INDEX_FCT  = SSREG_INDEX_SNDMAP4;
 localparam SAVESTATE_MODULES    = 2;
 wire [63:0] SaveStateBus_wired_or[0:SAVESTATE_MODULES-1];
 wire [63:0] SS_MAP1;
-wire [63:0] SS_MAP1_BACK;	
+wire [63:0] SS_MAP1_BACK;
 wire [63:0] SaveStateBus_Dout_active = SaveStateBus_wired_or[0] | SaveStateBus_wired_or[1];
-	
-eReg_SavestateV #(SSREG_INDEX_SNDMAP5, 64'h0000000000000000) iREG_SAVESTATE_MAP1 (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[0], SS_MAP1_BACK, SS_MAP1);  
+
+eReg_SavestateV #(SSREG_INDEX_SNDMAP5, 64'h0000000000000000) iREG_SAVESTATE_MAP1 (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[0], SS_MAP1_BACK, SS_MAP1);
 
 assign SaveStateBus_Dout = enable ? SaveStateBus_Dout_active : 64'h0000000000000000;
 

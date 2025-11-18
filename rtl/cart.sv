@@ -33,6 +33,8 @@ module cart_top (
 	output reg        prg_bus_write,  // PRG Data Driven
 	output reg        prg_conflict,   // PRG Data is ROM & prg_din
 	output reg        has_savestate,  // mapper supports savestates
+	output reg        prg_conflict_d0,   // PRG Data is ROM & (prg_din | 1)
+	output reg        has_flashsaves, // Homebrew mapper that saves to PRG-ROM in flash memory
 	input       [9:0] prg_mask,       // PRG Mask for SDRAM translation
 	input       [9:0] chr_mask,       // CHR Mask for SDRAM translation
 	input             chr_ex,         // chr_addr is from an extra sprite read if high
@@ -58,8 +60,9 @@ module cart_top (
 	output reg  [1:0] diskside,
 	input             fds_busy,       // FDS Disk Swap Busy
 	input             fds_eject,      // FDS Disk Swap Pause
-	input             fds_auto_eject,
-	input       [1:0] max_diskside,
+	input             fds_auto_eject, // FDS Auto Swap Enabled
+	input       [1:0] max_diskside,   // FDS disk side count
+	input             fds_fast,       // FDS disk access speed
 	// savestates              
 	input       [63:0]  SaveStateBus_Din,
 	input       [ 9:0]  SaveStateBus_Adr,
@@ -195,9 +198,9 @@ Mapper28 map28(
 //*****************************************************************************//
 // Name   : UNROM 512                                                          //
 // Mappers: 30                                                                 //
-// Status : No Self Flashing/Needs testing                                     //
+// Status : Self flashing except sector erase                                  //
 // Notes  : Homebrew mapper                                                    //
-// Games  : ?                                                                  //
+// Games  : More Glider                                                        //
 //*****************************************************************************//
 Mapper30 map30(
 	.clk        (clk),
@@ -312,14 +315,14 @@ MMC2 mmc2(
 //*****************************************************************************//
 // Name   : MMC3                                                               //
 // Mappers: 4, 33, 37, 47, 48, 74, 76, 80, 82, 88, 95, 112, 118, 119, 154, 189,//
-//          191, 192, 194, 195, 196, 206, 207, 268                             //
+//          191, 192, 194, 195, 196, 205, 206, 207, 208, 268                   //
 // Status : Working -- Blaarg IRQ timing test fails, but may be submapper      //
 // Notes  : While currently working well, this mapper could use a full review. //
 // Games  : Crystalis, Battletoads                                             //
 //*****************************************************************************//
 wire mmc3_en = me[118] | me[119] | me[47] | me[206] | me[112] | me[88] | me[154] | me[95]
 	| me[76] | me[80] | me[82] | me[207] | me[48] | me[33] | me[37] | me[74] | me[191]
-	| me[192] | me[194] | me[195] | me[196] | me[4] | me[189] | me[268];
+	| me[192] | me[194] | me[195] | me[196] | me[4] | me[189] | me[268] | me[205] | me[208];
 
 MMC3 mmc3 (
 	.clk        (clk),
@@ -667,16 +670,47 @@ Mapper41 map41(
 );
 
 //*****************************************************************************//
-// Name   : Mapper 42                                                          //
-// Mappers: 42                                                                 //
+// Name   : NTDEC 2722, Mapper42                                               //
+// Mappers: 40, 42                                                             //
 // Status : Not working                                                        //
 // Notes  : Used for converted FDS carts.                                      //
-// Games  : Love Warrior Nicol, Green Beret (unl)                              //
+// Games  : Super Mario Bros. 2 (LF36) Love Warrior Nicol, Green Beret (unl)   //
 //*****************************************************************************//
 Mapper42 map42(
 	.clk        (clk),
 	.ce         (ce),
-	.enable     (me[42]),
+	.enable     (me[40] | me[42]),
+	.flags      (flags),
+	.prg_ain    (prg_ain),
+	.prg_aout_b (prg_addr_b),
+	.prg_read   (prg_read),
+	.prg_write  (prg_write),
+	.prg_din    (prg_din),
+	.prg_dout_b (prg_dout_b),
+	.prg_allow_b(prg_allow_b),
+	.chr_ain    (chr_ain),
+	.chr_aout_b (chr_addr_b),
+	.chr_read   (chr_read),
+	.chr_allow_b(chr_allow_b),
+	.vram_a10_b (vram_a10_b),
+	.vram_ce_b  (vram_ce_b),
+	.irq_b      (irq_b),
+	.flags_out_b(flags_out_b),
+	.audio_in   (audio_in),
+	.audio_b    (audio_out_b)
+);
+
+//*****************************************************************************//
+// Name   : Kaiser KS202                                                       //
+// Mappers: 142                                                                //
+// Status : Needs evaluation                                                   //
+// Notes  : Used for converted FDS carts.                                      //
+// Games  : Bubble Bobble, Super Mario Bros. 2(j)                              //
+//*****************************************************************************//
+KS202 map142(
+	.clk        (clk),
+	.ce         (ce),
+	.enable     (me[142]),
 	.flags      (flags),
 	.prg_ain    (prg_ain),
 	.prg_aout_b (prg_addr_b),
@@ -735,14 +769,14 @@ Mapper65 map65(
 	.SaveStateBus_Dout (SaveStateBus_wired_or[29])
 );
 
-//*****************************************************************************//
-// Name   : GxROM                                                              //
-// Mappers: 11, 38, 46, 66, 86, 87, 101, 140                                       //
-// Status : 38/66 - Working, 38/87/101/140 - Needs eval, 86 - No Audio Samples //
-// Notes  :                                                                    //
-// Games  : Doraemon, Dragon Power, Sidewinder (145), Taiwan Mahjong 16 (149)  //
-//*****************************************************************************//
-wire mapper66_en = me[11] | me[38] | me[46] | me[86] | me[87] | me[101] | me[140] | me[66] | me[145] | me[149];
+//*********************************************************************************//
+// Name   : GxROM                                                                  //
+// Mappers: 11, 38, 46, 66, 86, 87, 101, 140, 144                                  //
+// Status : 38/66 - Working, 38/87/101/140/144 - Needs eval, 86 - No Audio Samples //
+// Notes  :                                                                        //
+// Games  : Doraemon, Dragon Power, Sidewinder (145), Taiwan Mahjong 16 (149)      //
+//*********************************************************************************//
+wire mapper66_en = me[11] | me[38] | me[46] | me[86] | me[87] | me[101] | me[140] | me[66] | me[144] | me[145] | me[149];
 Mapper66 map66(
 	.clk        (clk),
 	.ce         (ce),
@@ -1003,16 +1037,16 @@ Mapper77 map77(
 );
 
 //*****************************************************************************//
-// Name   : Holy Diver                                                         //
-// Mappers: 78, 70, 152                                                        //
-// Status : Needs testing overall                                             //
+// Name   : Holy Diver, NTDEC N715021                                          //
+// Mappers: 78, 70, 152, 81                                                    //
+// Status : Needs testing overall                                              //
 // Notes  : Submapper 1 Requires NES 2.0                                       //
-// Games  : Holy Diver, Uchuusent                                              //
+// Games  : Holy Diver, Uchuusent, Super Gun                                   //
 //*****************************************************************************//
 Mapper78 map78(
 	.clk        (clk),
 	.ce         (ce),
-	.enable     (me[152] | me[70] | me[78]),
+	.enable     (me[152] | me[70] | me[78] | me[81]),
 	.flags      (flags),
 	.prg_ain    (prg_ain),
 	.prg_aout_b (prg_addr_b),
@@ -1182,8 +1216,8 @@ Mapper107 map107(
 //*****************************************************************************//
 // Name   : GTROM                                                              //
 // Mappers: 111                                                                //
-// Status : Passes all tests except reflash test                               //
-// Notes  : No LED or self-reflash support                                     //
+// Status : Passes all tests except flash sector erase                         //
+// Notes  : No LED or flash sector erase                                       //
 // Games  : Super Homebrew War, Candelabra: Estoscerro, more homebrew          //
 //*****************************************************************************//
 Mapper111 map111(
@@ -2184,7 +2218,15 @@ MapperFDS mapfds(
 	.max_diskside (max_diskside),
 	.fds_busy   (fds_busy),
 	.fds_eject_btn (fds_eject),
-	.fds_auto_eject_en (fds_auto_eject)
+	.fds_auto_eject_en (fds_auto_eject),
+	.fds_fast   (fds_fast),
+	// savestates
+	.SaveStateBus_Din  (SaveStateBus_Din ),
+	.SaveStateBus_Adr  (SaveStateBus_Adr ),
+	.SaveStateBus_wren (SaveStateBus_wren),
+	.SaveStateBus_rst  (SaveStateBus_rst ),
+	.SaveStateBus_load (SaveStateBus_load ),
+	.SaveStateBus_Dout (SaveStateBus_wired_or[38])
 );
 
 //*****************************************************************************//
@@ -2225,6 +2267,8 @@ NSF nsfplayer(
 					 audio_in),
 	.exp_audioe (exp_audioe),  // Expansion Enabled (0x0=None, 0x1=VRC6, 0x2=VRC7, 0x4=FDS, 0x8=MMC5, 0x10=N163, 0x20=SS5B
 	.audio_b    (audio_out_b),
+	// Special ports
+	.chr_write  (chr_write),
 	.fds_din    (fds_data)
 );
 
@@ -2309,7 +2353,14 @@ fds_mixed snd_fds (
 	.data_in(prg_din),
 	.data_out(fds_data),
 	.audio_in(audio_in),
-	.audio_out(fds_audio)
+	.audio_out(fds_audio),
+	// savestates
+	.Savestate_MAPRAMactive   (Savestate_MAPRAMactive),
+	.Savestate_MAPRAMAddr     (Savestate_MAPRAMAddr[7:0]),
+	.Savestate_MAPRAMRdEn     (Savestate_MAPRAMRdEn),
+	.Savestate_MAPRAMWrEn     (Savestate_MAPRAMWrEn),
+	.Savestate_MAPRAMWriteData(Savestate_MAPRAMWriteData),
+	.Savestate_MAPRAMReadData (SaveStateRAM_wired_or[3])
 );
 
 wire [15:0] vrc7_audio;
@@ -2365,7 +2416,12 @@ always @* begin
 	{diskside} = {fds_diskside};
 
 	// Behavior helper flags
-	{has_savestate, prg_conflict, prg_bus_write, has_chr_dout} = {flags_out_b[3], flags_out_b[2], flags_out_b[1], flags_out_b[0]};
+	has_chr_dout    = flags_out_b[0];
+	prg_bus_write   = flags_out_b[1];
+	prg_conflict    = flags_out_b[2];
+	has_savestate   = flags_out_b[3];
+	prg_conflict_d0 = flags_out_b[4];
+	has_flashsaves  = flags_out_b[5];
 
 	// Address translation for SDRAM
 	if ((prg_aout[21] == 1'b0) && (prg_aout[24] == 1'b0))
@@ -2382,7 +2438,7 @@ always @* begin
 end
 
 // savestates
-localparam SAVESTATE_MODULES    = 38;
+localparam SAVESTATE_MODULES    = 39;
 wire [63:0] SaveStateBus_wired_or[0:SAVESTATE_MODULES-1];
 
 assign SaveStateBus_Dout  = SaveStateBus_wired_or[ 0] | SaveStateBus_wired_or[ 1] | SaveStateBus_wired_or[ 2] | SaveStateBus_wired_or[ 3] | SaveStateBus_wired_or[ 4] | 
@@ -2392,10 +2448,10 @@ assign SaveStateBus_Dout  = SaveStateBus_wired_or[ 0] | SaveStateBus_wired_or[ 1
 									 SaveStateBus_wired_or[20] | SaveStateBus_wired_or[21] | SaveStateBus_wired_or[22] | SaveStateBus_wired_or[23] | SaveStateBus_wired_or[24] |
 									 SaveStateBus_wired_or[25] | SaveStateBus_wired_or[26] | SaveStateBus_wired_or[27] | SaveStateBus_wired_or[28] | SaveStateBus_wired_or[29] |
 									 SaveStateBus_wired_or[30] | SaveStateBus_wired_or[31] | SaveStateBus_wired_or[32] | SaveStateBus_wired_or[33] | SaveStateBus_wired_or[34] |
-									 SaveStateBus_wired_or[35] | SaveStateBus_wired_or[36] | SaveStateBus_wired_or[37];
+									 SaveStateBus_wired_or[35] | SaveStateBus_wired_or[36] | SaveStateBus_wired_or[37] | SaveStateBus_wired_or[38];
 
-localparam SAVESTATERAM_MODULES    = 3;
-wire [7:0] SaveStateRAM_wired_or[0:SAVESTATE_MODULES-1];
-assign Savestate_MAPRAMReadData = SaveStateRAM_wired_or[0] | SaveStateRAM_wired_or[1] | SaveStateRAM_wired_or[2];
+localparam SAVESTATERAM_MODULES    = 4;
+wire [7:0] SaveStateRAM_wired_or[0:SAVESTATERAM_MODULES-1];
+assign Savestate_MAPRAMReadData = SaveStateRAM_wired_or[0] | SaveStateRAM_wired_or[1] | SaveStateRAM_wired_or[2] | SaveStateRAM_wired_or[3];
 
 endmodule
